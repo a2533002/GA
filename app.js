@@ -1,6 +1,8 @@
 const $=id=>document.getElementById(id);let rows=[],output=[],history=[];
-const fields=[['generation','次世代番号',1],['random','ランダム',6],['crossover','交叉',18],['mutation','突然変異',6],['elite','エリート',8],['min','遺伝子の最小値',0],['max','遺伝子の最大値',10],['pressure','選択の強さ',5],['seed','乱数シード',42]];
-fields.forEach(([id,label,value])=>{let l=document.createElement('label');l.textContent=label;let input=document.createElement('input');input.type='number';input.id=id;input.value=value;input.step=id==='pressure'?'0.1':'1';l.append(input);$('settings').append(l);});
+const fields=[['generation','次世代番号',1],['random','ランダム',6],['crossover','交叉',18],['mutation','突然変異',6],['elite','エリート',8],['min','担持量の最小値',0],['max','担持量の最大値',10],['pressure','進化圧',5],['seed','乱数シード',42]];
+const settingRows=[['generation'],['random','crossover','mutation','elite'],['min','max'],['pressure','seed']];
+const rowTargets={};settingRows.forEach(ids=>{let row=document.createElement('div');row.className='setting-row';row.style.setProperty('--columns',ids.length);$('settings').append(row);ids.forEach(id=>rowTargets[id]=row);});
+fields.forEach(([id,label,value])=>{let l=document.createElement('label');l.textContent=label;let input=document.createElement('input');input.type='number';input.id=id;input.value=value;input.step=id==='pressure'?'0.1':'1';l.append(input);rowTargets[id].append(l);});
 const options=()=>Object.fromEntries([...fields.map(([id])=>[id,Number($(id).value)]),['mode',$('mode').value]]);
 function save(name,text,type){let u=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 function table(data){let t=$('table');t.replaceChildren();if(!data.length)return;let cols=['Sample','Type',...GA.elements,'Score','Parent1','Parent2','Mutation_Positions'];let tr=document.createElement('tr');for(let c of cols){let th=document.createElement('th');th.textContent=c;tr.append(th);}t.append(tr);for(let r of data){tr=document.createElement('tr');for(let c of cols){let td=document.createElement('td');td.textContent=r[c]??'';tr.append(td);}t.append(tr);}}
