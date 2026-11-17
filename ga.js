@@ -4,10 +4,10 @@ const totalGeneLimit=15;
 function rng(seed){let a=seed>>>0;return()=>{a+=0x6D2B79F5;let t=a;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return((t^(t>>>14))>>>0)/4294967296;};}
 function csv(text){text=text.replace(/^\uFEFF/,'');let rows=[],row=[],s='',quoted=false;for(let i=0;i<text.length;i++){let c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){s+='"';i++;}else if(quoted||s==='')quoted=!quoted;else throw Error('CSVの引用符が不正です');}else if(c===','&&!quoted){row.push(s);s='';}else if((c==='\n'||c==='\r')&&!quoted){if(c==='\r'&&text[i+1]==='\n')i++;row.push(s);if(row.some(x=>x.trim()))rows.push(row);row=[];s='';}else s+=c;}if(quoted)throw Error('CSVの引用符が閉じていません');row.push(s);if(row.some(x=>x.trim()))rows.push(row);if(rows.length<2)throw Error('CSVにデータ行が必要です');let h=rows.shift().map(x=>x.replace(/^\uFEFF/,'').trim());if(new Set(h).size!==h.length)throw Error('CSVの列名が重複しています');return rows.map((r,i)=>{if(r.length!==h.length)throw Error(`CSV ${i+2}行目の列数が不一致です`);return Object.fromEntries(h.map((k,j)=>[k,r[j].trim()]));});}
 function number(v,label){if(v===undefined||String(v).trim()===''||!Number.isFinite(Number(v)))throw Error(label+'に数値が必要です');return Number(v);}
-function validate(rows,min,max,mode,auMax=max){if(!rows.length)throw Error('実験結果を読み込んでください');let names=new Set();return rows.map((r,i)=>{if(!r.Sample||names.has(r.Sample))throw Error('Sampleは空欄不可・重複不可です');names.add(r.Sample);let genes=elements.map(e=>{let v=number(r[e],`${r.Sample} ${e}`);if(!Number.isInteger(v)||v<min||v>(e==='Au'?auMax:max))throw Error(`${r.Sample} ${e}：遺伝子の範囲外です`);return v;});let score=number(r.Score,`${r.Sample} Score`);let fitness=mode==='fitness'?number(r.Fitness,`${r.Sample} Fitness`):null;if(fitness!==null&&fitness<0)throw Error('Fitnessは0以上にしてください');return {...r,genes,Score:score,Fitness:fitness};});}
-function isEligible(genes,min,max,auMax=max){
+function validate(rows,min,max,mode){if(!rows.length)throw Error('実験結果を読み込んでください');let names=new Set();return rows.map((r,i)=>{if(!r.Sample||names.has(r.Sample))throw Error('Sampleは空欄不可・重複不可です');names.add(r.Sample);let genes=elements.map(e=>{let v=number(r[e],`${r.Sample} ${e}`);if(!Number.isInteger(v)||v<min||v>max)throw Error(`${r.Sample} ${e}：遺伝子の範囲外です`);return v;});let score=number(r.Score,`${r.Sample} Score`);let fitness=mode==='fitness'?number(r.Fitness,`${r.Sample} Fitness`):null;if(fitness!==null&&fitness<0)throw Error('Fitnessは0以上にしてください');return {...r,genes,Score:score,Fitness:fitness};});}
+function isEligible(genes,min,max){
   return genes.length===elements.length &&
-    genes.every((gene,index)=>Number.isSafeInteger(gene)&&gene>=min&&gene<=(elements[index]==='Au'?auMax:max)) &&
+    genes.every(gene=>Number.isSafeInteger(gene)&&gene>=min&&gene<=max) &&
     genes.reduce((sum,gene)=>sum+gene,0)<=totalGeneLimit;
 }
 
@@ -40,12 +40,10 @@ function randomSampler(min, caps, rand){
 }
 
 function generate(rows,o){
-  const auMax=o.auMax??o.max;
   for(const key of ['min','max','random','crossover','mutation','elite','generation','seed']){
     if(!Number.isSafeInteger(o[key]))throw Error(key+'は整数にしてください');
   }
   if(o.min<0||o.max<=o.min||o.max>1000000)throw Error('遺伝子範囲は0以上、最大値は最小値より大きくしてください');
-  if(!Number.isSafeInteger(auMax)||auMax<o.min||auMax>1000000)throw Error('Auの最大値は最小値以上の整数にしてください');
   if(o.min*elements.length>totalGeneLimit)throw Error('各元素の最小値だけで遺伝子合計15を超えます');
   for(const key of ['random','crossover','mutation','elite']){
     if(o[key]<0)throw Error('個体数は0以上にしてください');
@@ -55,8 +53,8 @@ function generate(rows,o){
   const n=o.random+o.crossover+o.mutation+o.elite;
   if(n<1||n>500)throw Error('合計個体数は1〜500です');
 
-  const population=validate(rows,o.min,o.max,o.mode,auMax);
-  const eligible=genes=>isEligible(genes,o.min,o.max,auMax);
+  const population=validate(rows,o.min,o.max,o.mode);
+  const eligible=genes=>isEligible(genes,o.min,o.max);
   const elites=population.filter(p=>eligible(p.genes));
   if(o.elite>elites.length)throw Error('合計15以下の親がエリート指定数より少なくなっています。エリート数を下げてください');
   const scores=population.map(p=>p.Score);
@@ -74,7 +72,7 @@ function generate(rows,o){
     }
     return population.at(-1);
   };
-  const caps=elements.map(e=>e==='Au'?auMax:o.max);
+  const caps=elements.map(()=>o.max);
   const sampleRandom=randomSampler(o.min,caps,rand);
   const mutable=caps.flatMap((cap,index)=>cap>o.min?[index]:[]);
   const seen=new Set(population.map(p=>p.genes.join(',')));
