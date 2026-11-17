@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>光触媒活性解析 | MB分解</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#172d3a;background:#eef4f4;line-height:1.55}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0}header{background:#12343d;color:#fff;padding:2.2rem 1rem}
+header div,main{max-width:64rem;margin:auto}h1,h2,p{margin:0 0 .55rem}header p{color:#c6e0e0;margin:0}
+main{padding:1rem}section{background:#fff;border:1px solid #d7e4e5;border-radius:14px;padding:1.25rem;margin-bottom:1rem}
+.controls{display:flex;flex-wrap:wrap;align-items:end;gap:.8rem;margin:.9rem 0}
+label{display:grid;gap:.3rem;font-weight:650} input,select,button{font:inherit;max-width:100%;min-height:2.55rem}
+input[type=number],select{border:1px solid #9eb1b6;border-radius:6px;padding:.3rem .5rem;color:inherit;background:#fff} input[type=number]{width:8rem}
+button{border:1px solid #096674;border-radius:7px;background:#096674;color:white;padding:.4rem .8rem;cursor:pointer}button:disabled{opacity:.5;cursor:default}
+.muted,small{color:#49636c}.error{color:#a12627}.scroll{overflow:auto}canvas{display:block;width:100%;min-width:520px;height:auto}
+table{border-collapse:collapse;width:100%;white-space:nowrap}td,th{text-align:left;border-bottom:1px solid #e3ebec;padding:.55rem .65rem}th{background:#eef5f5}details{margin-top:1rem}summary{cursor:pointer}
+</style>
+</head>
+<body>
+<header><div><h1>光触媒活性解析</h1><p>メチレンブルー分解の見かけの一次反応速度定数</p></div></header>
+<main>
+<section aria-labelledby="inputTitle">
+<h2 id="inputTitle">測定ファイル</h2>
+<label>Gen5のExcel（.xlsx）<input id="file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
+<div class="controls">
+<label>照射間隔（分）<input id="interval" type="number" min="0.01" step="any" value="5"></label>
+<label>試料あたりのウェル数<select id="replicates"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>6</option></select></label>
+<label>試料構成<select id="layout"><option value="generic">試料番号</option><option value="au">Au比較（新7・旧7・P25）</option></select></label>
+</div>
+<p class="muted">シート順に0分から等間隔として計算します。ウェルはA1から行方向の順番で集計します。</p>
+<p id="status" role="status" aria-live="polite">ファイルを選ぶと自動で解析します。測定データはブラウザ内で処理します。</p>
+</section>
+<section id="results" hidden>
+<h2>反応速度定数</h2>
+<div class="controls">
+<label>表示<select id="view"><option value="all">全試料</option><option value="new" hidden>新Au＋P25</option><option value="old" hidden>旧Au＋P25</option></select></label>
+<button id="png" type="button">グラフをPNG保存</button><button id="csv" type="button">結果をCSV保存</button>
+</div>
+<div class="scroll"><canvas id="chart" role="img" aria-label="試料別の反応速度定数。数値は下の表で確認できます。"></canvas></div>
+<p class="muted">棒は平均、エラーバーは標準偏差（n ≥ 2）。</p>
+<div class="scroll"><table><thead><tr><th>試料</th><th>ウェル</th><th>平均 k (h⁻¹)</th><th>SD</th><th>n</th></tr></thead><tbody id="summary"></tbody></table></div>
+<details><summary>ウェル別の結果</summary><div class="scroll"><table><thead><tr><th>ウェル</th><th>k (h⁻¹)</th><th>R²</th><th>解析点数</th></tr></thead><tbody id="wells"></tbody></table></div></details>
+<details><summary>計算式</summary><p>A = A₆₆₅ − A₈₀₀。各ウェルで ln(A₀/Aₜ) を照射時間（h）に対して切片ありで直線回帰し、その傾きを k とします。欠測または補正吸光度が0以下のウェルは集計から除き、ウェル別の結果に理由を表示します。</p></details>
+</section>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let workbook, groups, fits, fileStem, request = 0;
+
+function zipEntries(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const d = new DataView(buffer);
+  let end = bytes.length - 22;
+  const first = Math.max(0, end - 65535);
+  while (end >= first && (d.getUint32(end,true) !== 0x06054b50 ||
+      end + 22 + d.getUint16(end+20,true) !== bytes.length)) end--;
+  if (end < first) throw Error('有効な .xlsx ファイルを選んでください。');
+  const count = d.getUint16(end+10,true);
+  let offset = d.getUint32(end+16,true);
+  const entries = new Map();
+  const decode = new TextDecoder();
+  for (let i=0; i<count; i++) {
+    if (d.getUint32(offset,true) !== 0x02014b50) throw Error('Excelファイルの構造を読み取れません。');
+    const nameSize = d.getUint16(offset+28,true);
+    const name = decode.decode(bytes.subarray(offset+46,offset+46+nameSize));
+    entries.set(name, {
+      method:d.getUint16(offset+10,true), size:d.getUint32(offset+20,true),
+      uncompressed:d.getUint32(offset+24,true), start:d.getUint32(offset+42,true)
+    });
+    offset += 46 + nameSize + d.getUint16(offset+30,true) + d.getUint16(offset+32,true);
+  }
+  return async name => {
+    const entry = entries.get(name);
+    if (!entry || entry.uncompressed > 20_000_000) throw Error('Excel内のデータが見つからないか、大きすぎます。');
+    const o = entry.start;
+    if (d.getUint32(o,true) !== 0x04034b50) throw Error('Excelファイルが破損しています。');
+    const start = o+30+d.getUint16(o+26,true)+d.getUint16(o+28,true);
+    const payload = bytes.subarray(start,start+entry.size);
+    if (entry.method === 0) return decode.decode(payload);
+    if (entry.method !== 8) throw Error('Excelの圧縮形式に対応していません。');
+    const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).text();
+  };
+}
+
+async function readWorkbook(buffer) {
+  const read = zipEntries(buffer);
+  async function xml(path) {
+    const doc = new DOMParser().parseFromString(await read(path),'application/xml');
+    if (doc.querySelector('parsererror')) throw Error('Excel内のXMLを読み取れません。');
+    return doc;
+  }
+  const book = await xml('xl/workbook.xml');
+  const rel = await xml('xl/_rels/workbook.xml.rels');
+  const relationships = new Map([...rel.getElementsByTagNameNS('*','Relationship')]
+    .map(el => [el.getAttribute('Id'),el.getAttribute('Target')]));
+  const measurements = [];
+  for (const sheet of book.getElementsByTagNameNS('*','sheet')) {
+    const id = sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id');
+    const target = relationships.get(id);
+    if (!target) throw Error('測定シートの場所を特定できません。');
+    const path = new URL(target,'https://workbook.invalid/xl/').pathname.slice(1);
+    const doc = await xml(path);
+    const values = new Map();
+    for (const c of doc.getElementsByTagNameNS('*','c')) {
+      const v = c.getElementsByTagNameNS('*','v')[0]?.textContent;
+      const type = c.getAttribute('t');
+      if (v?.trim() && (!type || type === 'n') && Number.isFinite(Number(v))) {
+        values.set(c.getAttribute('r'),Number(v));
+      }
+    }
+    const header = [...values.keys()].find(key => /^C\d+$/.test(key) &&
+      Array.from({length:12},(_,i)=>values.get(String.fromCharCode(67+i)+key.slice(1))===i+1).every(Boolean) &&
+      values.get('O'+(Number(key.slice(1))+1))===665 &&
+      values.get('O'+(Number(key.slice(1))+2))===800);
+    if (!header) throw Error(sheet.getAttribute('name')+' にGen5の665/800 nm測定表が見つかりません。');
+    const first = Number(header.slice(1))+1;
+    const plate = new Map();
+    for (let r=0;r<8;r++) {
+      if (values.get('O'+(first+r*2))!==665 || values.get('O'+(first+r*2+1))!==800) {
+        throw Error(sheet.getAttribute('name')+' の波長配置を確認してください。');
+      }
+      for (let c=0;c<12;c++) {
+        const column = String.fromCharCode(67+c);
+        const a = values.get(column+(first+2*r));
+        const b = values.get(column+(first+2*r+1));
+        if (a!==undefined || b!==undefined) plate.set(String.fromCharCode(65+r)+(c+1),a-b);
+      }
+    }
+    measurements.push(plate);
+  }
+  if (measurements.length<2) throw Error('2時点以上の測定シートが必要です。');
+  const active = [...new Set(measurements.flatMap(plate=>[...plate.keys()]))];
+  active.sort((a,b)=>a.charCodeAt(0)-b.charCodeAt(0)||Number(a.slice(1))-Number(b.slice(1)));
+  if (!active.length) throw Error('測定ウェルが見つかりません。');
+  return {measurements,active};
+}
+
+function fit(well, step) {
+  const data = workbook.measurements.map(plate=>plate.get(well));
+  const n = data.filter(a=>Number.isFinite(a)&&a>0).length;
+  if (n!==data.length) return {well,n,reason:'欠測または補正吸光度 ≤ 0'};
+  const y = data.map(a=>Math.log(data[0]/a));
+  const x = y.map((_,i)=>i*step);
+  const xm=(x[0]+x.at(-1))/2;
+  const ym=y.reduce((a,b)=>a+b,0)/n;
+  let xx=0, yy=0, xy=0;
+  for(let i=0;i<n;i++){
+    const dx=x[i]-xm, dy=y[i]-ym;
+    xx+=dx*dx; yy+=dy*dy; xy+=dx*dy;
+  }
+  return {well,n,k:xy/xx,r2:yy===0?null:Math.min(1,xy*xy/(xx*yy))};
+}
+
+function analyze() {
+  if (!workbook) return;
+  const interval = Number($('interval').value);
+  const size = Number($('replicates').value);
+  const au = $('layout').value === 'au';
+  if (!$('interval').checkValidity() || interval<=0 || !Number.isFinite(interval)){
+    status('照射間隔を0.01分以上で入力してください。',true);return;
+  }
+  if (au && (size!==3 || workbook.active.length<45)){
+    status('Au比較には3ウェルずつ、45ウェル以上のデータが必要です。',true);return;
+  }
+  fits = workbook.active.map(well=>fit(well,interval/60));
+  groups=[];
+  for(let from=0;from<fits.length;from+=size){
+    const members=fits.slice(from,from+size);
+    const index=groups.length;
+    const kind=!au?'generic':index<7?'new':index<14?'old':index===14?'control':'other';
+    const name=kind==='new'?'新Au '+(index+1):kind==='old'?'旧Au '+(index-6):
+      kind==='control'?'P25のみ':kind==='other'?members.map(item=>item.well).join('–'):'試料 '+(index+1);
+    const valid=members.filter(item=>!item.reason);
+    const n=valid.length;
+    const mean=n?valid.reduce((a,item)=>a+item.k,0)/n:null;
+    const sd=n>1?Math.sqrt(valid.reduce((a,item)=>a+(item.k-mean)**2,0)/(n-1)):null;
+    groups.push({kind,name,members,n,mean,sd});
+  }
+  for(const option of $('view').options) option.hidden=option.value!=='all'&&!au;
+  if(!au) $('view').value='all';
+  $('results').hidden=false;
+  const invalid=fits.filter(item=>item.reason).length;
+  status(workbook.measurements.length+'時点・'+fits.length+'ウェル・'+groups.length+'試料'+
+    (invalid?'（解析対象外 '+invalid+'ウェル）':'')+
+    (fits.length%size?'。最後の試料のウェル数は設定値より少なくなっています。':''));
+  render();
+}
+
+function status(message,error=false){
+  $('status').textContent=message;
+  $('status').classList.toggle('error',error);
+  if(error) $('results').hidden=true;
+}
+const format = number => number == null?'—':number.toFixed(3);
+const visible = () => groups.filter(group=>$('view').value==='all'||[group.kind,'control'].includes($('view').value));
+function table(id, rows){
+  $(id).replaceChildren(...rows.map(row=>{
+    const tr=document.createElement('tr');
+    for(const value of row) tr.insertCell().textContent=value;
+    return tr;
+  }));
+}
+function render(){
+  if(!groups || $('results').hidden) return;
+  const selected=visible();
+  table('summary',selected.map(g=>[g.name,g.members.map(item=>item.well).join(', '),format(g.mean),format(g.sd),g.n]));
+  table('wells',selected.flatMap(g=>g.members.map(item=>[item.well,item.reason||format(item.k),format(item.r2),item.n])));
+  draw(selected);
+}
+
+function draw(selected){
+  const canvas=$('chart');
+  const width=Math.max(820,selected.length*68+94), height=420;
+  canvas.width=width*2; canvas.height=height*2;
+  const c=canvas.getContext('2d');
+  c.scale(2,2);
+  const left=68, right=width-18, top=49, bottom=height-111;
+  c.fillStyle='#fff';c.fillRect(0,0,width,height);
+  c.fillStyle='#172d3a';c.font='bold 19px sans-serif';c.fillText('見かけの一次反応速度定数',left,28);
+  const min=Math.min(0,...groups.map(g=>(g.mean??0)-(g.sd??0)));
+  const max=Math.max(0,...groups.map(g=>(g.mean??0)+(g.sd??0)));
+  const approximate=(max-min||1)/5;
+  const power=10**Math.floor(Math.log10(approximate));
+  const tick=([1,2,2.5,5,10].find(v=>v*power>=approximate)||10)*power;
+  const lower=Math.floor(min/tick)*tick, upper=Math.max(lower+tick,Math.ceil(max/tick)*tick);
+  const y=v=>bottom-(v-lower)*(bottom-top)/(upper-lower);
+  c.font='12px sans-serif';c.textAlign='right';
+  for(let i=0;i<=Math.round((upper-lower)/tick);i++){
+    const value=lower+i*tick, pos=y(value);
+    c.strokeStyle=Math.abs(value)<tick/100?'#647983':'#dbe6e8';
+    c.beginPath();c.moveTo(left,pos);c.lineTo(right,pos);c.stroke();
+    c.fillStyle='#405966';c.fillText(String(Number(value.toPrecision(3))),left-8,pos+4);
+  }
+  c.textAlign='left';c.fillText('k (h⁻¹)',12,32);
+  const slot=(right-left)/selected.length;
+  const colors={new:'#087f8c',old:'#bd6c26',control:'#62748a',other:'#a2aeb4',generic:'#087f8c'};
+  selected.forEach((g,i)=>{
+    const x=left+slot*(i+.5), bar=Math.min(48,slot*.62);
+    if(g.mean!==null){
+      c.fillStyle=colors[g.kind];c.fillRect(x-bar/2,Math.min(y(0),y(g.mean)),bar,Math.max(1,Math.abs(y(g.mean)-y(0))));
+      if(g.sd!==null){
+        const a=y(g.mean-g.sd),b=y(g.mean+g.sd);
+        c.strokeStyle='#243544';c.beginPath();c.moveTo(x,a);c.lineTo(x,b);
+        for(const v of [a,b]){c.moveTo(x-5,v);c.lineTo(x+5,v);}
+        c.stroke();
+      }
+    }
+    c.save();c.translate(x,bottom+9);c.rotate(-Math.PI/4);c.textAlign='right';
+    c.fillStyle='#233d49';c.fillText(g.name,0,0);c.restore();
+  });
+  c.fillStyle='#405966';c.fillText('平均 ± 標準偏差',left,height-15);
+}
+
+function save(blob,name){
+  if(!blob) return;
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=name;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+$('file').addEventListener('change',async event=>{
+  const file=event.target.files[0];
+  if(!file) return;
+  const token=++request;
+  workbook=null;groups=null;$('results').hidden=true;
+  status('測定ファイルを解析中…');
+  try{
+    const data=await readWorkbook(await file.arrayBuffer());
+    if(token!==request) return;
+    workbook=data;
+    fileStem=file.name.replace(/\.xlsx$/i,'');
+    analyze();
+  }catch(error){
+    if(token===request) status('読み込みエラー。'+error.message,true);
+  }
+});
+for(const id of ['interval','replicates','layout']) $(id).addEventListener('change',analyze);
+$('view').addEventListener('change',render);
+$('png').addEventListener('click',()=>{
+  const name=fileStem+'_k_'+$('view').value+'.png';
+  $('chart').toBlob(blob=>save(blob,name),'image/png');
+});
+$('csv').addEventListener('click',()=>{
+  const quote=value=>'"'+String(value??'').replaceAll('"','""')+'"';
+  const rows=[['試料','ウェル','平均 k (h⁻¹)','SD','n'],
+    ...visible().map(g=>[g.name,g.members.map(item=>item.well).join(' '),g.mean,g.sd,g.n])];
+  save(new Blob(['\ufeff'+rows.map(row=>row.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),
+    fileStem+'_k_'+$('view').value+'.csv');
+});
+</script>
+</body>
+</html>
