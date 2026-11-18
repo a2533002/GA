@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id);let rows=[],output=[],history=[];
-const fields=[['generation','次世代番号',1],['random','ランダム',6],['crossover','交叉',18],['mutation','突然変異',6],['elite','エリート',8],['min','担持量の最小値',0],['max','各元素の最大値',10],['pressure','進化圧',5],['seed','乱数シード',42]];
+const fields=[['generation','次世代番号',1],['random','ランダム',4],['crossover','交叉',6],['mutation','突然変異',4],['elite','エリート',0],['min','各元素の最小値',0],['max','各元素の最大値',15],['pressure','進化圧',5],['seed','乱数シード',20261118]];
 const settingRows=[['generation'],['random','crossover','mutation','elite'],['min','max'],['pressure','seed']];
 const rowTargets={};settingRows.forEach(ids=>{let row=document.createElement('div');row.className='setting-row';row.style.setProperty('--columns',ids.length);$('settings').append(row);ids.forEach(id=>rowTargets[id]=row);});
 fields.forEach(([id,label,value])=>{let l=document.createElement('label');l.textContent=label;let input=document.createElement('input');input.type='number';input.id=id;input.value=value;input.step=id==='pressure'?'0.1':'1';l.append(input);rowTargets[id].append(l);});
@@ -19,9 +19,9 @@ function excludedText(count){
 function load(data,name){const {kept,excluded}=activeElementRows(data);data=kept;validateInput(data);rows=data;output=[];$('export').disabled=true;refreshDispense();let s=data.map(r=>Number(r.Score));history.push({name,count:s.length,avg:s.reduce((a,b)=>a+b,0)/s.length,max:Math.max(...s)});showHistory();$('info').textContent=`${name}：${rows.length}個体を読み込みました${excludedText(excluded)}`;let gens=rows.map(r=>/^G(\d+)-/.exec(r.Sample)).filter(Boolean).map(m=>Number(m[1]));if(gens.length)$('generation').value=Math.max(...gens)+1;table(rows);$('status').textContent='';}
 function error(e){$('status').textContent=e.message;}
 $('file').onchange=async e=>{try{let f=e.target.files[0];if(f)load(GA.csv(await f.text()),f.name);}catch(e){error(e);}};
-$('demo').onclick=()=>{let r=GA.rng(17),sample=GA.randomSampler(0,GA.elements.map(()=>10),r);let data=Array.from({length:38},(_,i)=>Object.fromEntries([['Sample',`G0-${i+1}`],...sample().map((gene,j)=>[GA.elements[j],gene]),['Score',(0.2+r()*2).toFixed(5)]]));try{load(data,'デモ（実験値ではありません）');}catch(e){error(e);}};
-$('template').onclick=()=>save('G0_template.csv',GA.stringify(Array.from({length:38},(_,i)=>({Sample:`G0-${i+1}`,...Object.fromEntries(GA.elements.map(e=>[e,0])),Score:''}))),'text/csv;charset=utf-8');
-$('run').onclick=()=>{output=[];$('export').disabled=true;refreshDispense();try{let o=options();output=GA.generate(rows,o);refreshDispense();table(output);$('export').disabled=false;$('status').textContent=`${output.length}個体を生成しました。新規候補のScoreは実験後に入力してください。`;}catch(e){error(e);}};
+$('demo').onclick=()=>{let r=GA.rng(17);let sample=GA.randomSampler(0,GA.elements.map(()=>15),r);let data=Array.from({length:14},(_,i)=>({Sample:`G0-${i+1}`,...Object.fromEntries(sample().map((gene,j)=>[GA.elements[j],gene])),Score:(0.2+r()*2).toFixed(5)}));try{load(data,'デモ（実験値ではありません）');}catch(e){error(e);}};
+$('template').onclick=()=>save('G0_template.csv',GA.stringify(Array.from({length:14},(_,i)=>({Sample:`G0-${i+1}`,...Object.fromEntries(GA.elements.map(e=>[e,0])),Score:''}))),'text/csv;charset=utf-8');
+$('run').onclick=()=>{output=[];$('export').disabled=true;refreshDispense();try{let o=options();if(o.generation<1)throw Error('G0の測定結果CSVを読み込み、次世代番号を1以上にしてください。');output=GA.generate(rows,o);refreshDispense();table(output);$('export').disabled=false;$('status').textContent=`${output.length}個体を生成しました。新規候補のScoreは実験後に入力してください。`;}catch(e){error(e);}};
 $('export').onclick=()=>save(`G${$('generation').value}_list.csv`,GA.stringify(output),'text/csv;charset=utf-8');
 $('backup').onclick=()=>save('ga_project.json',JSON.stringify({version:1,options:options(),rows,output,history},null,2),'application/json');
 $('restore').onchange=async e=>{try{let f=e.target.files[0];if(!f)return;let p=JSON.parse(await f.text());if(p.version!==1||!Array.isArray(p.rows)||!Array.isArray(p.output)||!Array.isArray(p.history))throw Error('作業ファイルの形式が違います');for(let [id,,v]of fields)$(id).value=p.options?.[id]??v;$('mode').value=p.options?.mode==='fitness'?'fitness':'score';const {kept,excluded}=activeElementRows(p.rows);if(kept.length)validateInput(kept);const o=options();const compatible=p.output.every(row=>!('Ru' in row)&&!('Rh' in row)&&GA.isEligible(GA.elements.map(e=>row[e]),o.min,o.max));rows=kept;output=compatible?p.output:[];history=p.history;refreshDispense();table(output.length?output:rows);showHistory();$('export').disabled=!output.length;$('info').textContent=`復元：${rows.length}個体${excludedText(excluded)}`;$('status').textContent=compatible?'作業データを復元しました':'実験結果を復元しました。保存時の候補は現在の8元素・合計15の条件で再生成してください。';}catch(e){error(e);}};
@@ -96,3 +96,4 @@ $('exportDispense').onclick = () => {
     $('dispenseStatus').textContent = error.message;
   }
 };
+

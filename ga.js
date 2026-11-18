@@ -39,11 +39,12 @@ function randomSampler(min, caps, rand){
   };
 }
 
+
 function generate(rows,o){
   for(const key of ['min','max','random','crossover','mutation','elite','generation','seed']){
     if(!Number.isSafeInteger(o[key]))throw Error(key+'は整数にしてください');
   }
-  if(o.min<0||o.max<=o.min||o.max>1000000)throw Error('遺伝子範囲は0以上、最大値は最小値より大きくしてください');
+  if(o.min<0||o.max<=o.min||o.max>15)throw Error('遺伝子範囲は0〜15、最大値は最小値より大きくしてください');
   if(o.min*elements.length>totalGeneLimit)throw Error('各元素の最小値だけで遺伝子合計15を超えます');
   for(const key of ['random','crossover','mutation','elite']){
     if(o[key]<0)throw Error('個体数は0以上にしてください');
@@ -139,3 +140,4 @@ function generate(rows,o){
 function stringify(rows){let h=['Sample','Type','Parent1','Parent2',...elements,'Score','N_score','Fitness','Sum_fitness','Mutation_Rate','Mutation_Positions','Mutated_Gene_Numbers','Common_Genes','Non_Common_Genes'];let esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';return '\uFEFF'+[h,...rows.map(r=>h.map(k=>r[k]??''))].map(r=>r.map(esc).join(',')).join('\r\n');}
 const api={elements,totalGeneLimit,randomSampler,isEligible,rng,csv,generate,stringify,validate};if(typeof module!=='undefined')module.exports=api;else root.GA=api;
 })(globalThis);
+
