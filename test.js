@@ -7,6 +7,7 @@ for(let seed=0;seed<200;seed++){
   assert.equal(new Set(g0.map(r=>GA.elements.map(e=>r[e]).join(','))).size,14);
   assert.equal(g0.filter(r=>r.Au>0).length,10);
   assert.equal(g0.filter(r=>r.Au===0).length,4);
+  assert(g0.slice(0,10).every(r=>r.Au>=5&&r.Au<=12));
   for(const row of g0){
     assert(GA.isEligible(GA.elements.map(e=>row[e]),0,15));
     assert(GA.elements.filter(e=>row[e]>0).length>=4);
